@@ -66,8 +66,31 @@ An example implementation of backlink computation, certificate pool computation 
 
 ## Related Work
 
-[Secure scuttlebutt](https://www.scuttlebutt.nz/) inspired leyline-core. Leyline-core can be seen as a generalization of ssb's signed linked lists to a signed skip-list to allow partial replication (at the cost of quasilinear log size rather than ssb's linear log size). To mitigate the lack of partial replication, ssb supports retrieval of log entries via hash, but forfeits the security guarantees of regularly replicated entries. As of writing, ssb also signs the payloads directly rather than their hash, making it impossible to locally delete log content without losing the ability to replicate the log to other peers.
+[Secure scuttlebutt](https://www.scuttlebutt.nz/) inspired leyline-core. Leyline-core can be seen as a generalization of ssb's signed linked lists to a signed skip-list to allow partial replication (at the cost of quasilinear log size rather than ssb's linear log size). To mitigate the lack of partial replication, ssb supports retrieval of log entries via hash, but forfeits the security guarantees of regularly replicated entries. As of writing, ssb also signs the payloads directly rather than their hash, making it impossible to locally delete log payloads without losing the ability to replicate the log to other peers.
 
 [Hypercore](https://github.com/mafintosh/hypercore) is a distributed, sparsely-replicatable append-only log like leyline-core. It uses merkle trees whereas leyline-core only uses backlinks. The two approaches are related though, the backlink distribution of leyline-core entries corresponds directly to the merkle forests of hypercore. Leyline-core's focus on transitive sparse replication via certificate pools can also be implemented on top of hypercore. The largest difference is that hypercore does not provide guarantees about the created-before order of log entries. Those weaker guarantees allow hypercore to keep the metadata overhead linear.
 
 Leyline-core is effectively a combination of the strong guarantees of ssb with the partial replication of hypercore, at the cost of quasilinear log metadata size.
+
+## Implementation Notes
+
+Some parts of leyline-core are fairly obvious to implement, others less so. The obvious ones include defining an in-memory representation of entries, encoding and decoding them, computing hashes, computing the set of backlinks an entry of a given sequence number includes, computing certificate pools. Beyond those, there are persistent storage and log verification. These can get trickier because of statefulness, asynchronicity and conflicting performance goals.
+
+To verify an entry, you need access to previous entries. An verification implementation must thus decide on an interface to the log store. This interface should probably be nonblocking, since it might be backed up by persistent (i.e. slow) storage. It might be a good idea to keep this interface generic, allowing to transparently substitute different storage backends (for example in-memory storage, a local database, a cloud provider). The backends might also differ in how much data they want to persist, and how much data to recompute on-the-fly. Ideally, this would be hidden behind the interface (as usual, performance and abstraction might end up at odds, so feel free to disregard this patronizing advice).
+
+Authenticity verification of entries can be done once upon receiving them, so there's not much complexity there. But for backlink verification, you probably want to somehow cache results. Entries can be in different states regarding backlink verification:
+
+- fully verified (only those should be handed to the application layer)
+- verified relative to some other entry
+- parts of the backlinks have been verified, others haven't been (maybe because the backlink target isn't available in the database)
+  - among those, it makes a difference whether the entry is intended for the application layer, or whether it is just part of some certificate pools
+
+Keeping track of partial verification can be quite fiddly, so better plan this in advance when designing a storage backend. How much of this logic should be backend-specific and how much can be implemented via the generic interface between the leyline-core library and the backends is likely a matter of taste.
+
+Some simplifying assumptions can be made, such as entries never being deleted, or entries being added only in ascending order of sequence numbers. Whether those assumptions are realistic and/or overly restrictive is another question altogether, depending on the backend and use case.
+
+In general, a backend will likely track which entries are interesting for the application layer, and which entries are just available because they are needed for verification. There could be two interfaces to higher-level code, one that only provides explicitly requested data (that has been fully verified), and one that provides all data that happens to be available. The latter interface would need to distinguish between different levels of verification. A general-purpose application platform built on leyline-core probably only wants to expose the former interface, since the latter provides less simple guarantees regarding created-before order and forklessness.
+
+Aside from metadata management, there's also the question of storing actual payloads. This can be fairly specialized, depending on the application(s) built on top of leyline-core. Details of this choice might also leak into a more specialized leyline-core implementation, particularly well-suited for a specific use-case.
+
+The separation of payload and metadata via the payload_hash allows locally deleting payloads while keeping the log intact, verifiable and replicatable. Implementations should support this, and may want to store a set of "blocked" payload_hashes so that a deleted payload doesn't accidentally get stored again because of e.g. an overly eager replication mechanism. Or they might make sure that such retroactive fetching can't accidentally happen, thus mitigating the need for a block set. Either is fine, an implementation should just design the desired approach in advance.
