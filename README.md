@@ -31,6 +31,8 @@ Since signatures and hashes are computed over concrete bytes rather than abstrac
 
 Note that peers don't necessarily have to adhere to this encoding when persisting or exchanging data. In some cases, tag, seqnum, backlinks and payload_hash can be reconstructed without them having to be transmitted, additionally having to parse all backlinks to find out where the sig starts would be cumbersome. This encoding is only binding for signature verification and hash computation, nothing more.
 
+In particular, a fully replicated log can be stored in `O(n)` space by dropping backlinks and reconstructing them on-the-fly. Add in a cache, and you get both (heuristically) fast retrieval and linear storage overhead, at the cost of additional implementation effort and a larger state space of the program. This may not be worth it for most settings, but at least the option to go back to `O(n)` space complexity is available.
+
 The authenticity of an entry can be verified by checking whether the signature is correct. Further validity checks on sequence numbers and backlinks are necessary to guarantee absence of forks and verify the claimed entry creation order, as described in the next section.
 
 ## Backlinks and Entry Verification
